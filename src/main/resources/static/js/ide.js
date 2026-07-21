@@ -1192,7 +1192,7 @@ const WallpaperManager = {
         if (this.wallpapers.length === 0) return;
         this.currentIndex = index;
         const wp = this.wallpapers[this.currentIndex];
-        this.videoEl.src = `/api/wallpaper/stream?file=${encodeURIComponent(wp)}`;
+        this.videoEl.src = `/wallpaper/${encodeURIComponent(wp)}`;
         if (this.nameEl) this.nameEl.textContent = wp;
     },
 
