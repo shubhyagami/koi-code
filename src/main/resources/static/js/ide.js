@@ -1335,13 +1335,23 @@ const MusicPlayer = {
     },
 
     fetchPlaylist() {
+        const playlistContainer = document.getElementById('music-playlist');
+        if (playlistContainer) playlistContainer.innerHTML = '<div style="padding: 10px; color: var(--text-dim); text-align: center;"><i class="fas fa-spinner fa-spin"></i> Loading music...</div>';
+        
         fetch('/api/music/list')
             .then(r => r.json())
             .then(data => {
                 this.playlist = data;
-                this.renderPlaylist();
+                if (data.length === 0 && playlistContainer) {
+                    playlistContainer.innerHTML = '<div style="padding: 10px; color: var(--text-dim); text-align: center;">No music found</div>';
+                } else {
+                    this.renderPlaylist();
+                }
             })
-            .catch(e => console.error('Failed to load music list', e));
+            .catch(e => {
+                if (playlistContainer) playlistContainer.innerHTML = '<div style="padding: 10px; color: #ff5555; text-align: center;">Error loading music</div>';
+                console.error('Error fetching music list', e);
+            });
     },
 
     renderPlaylist() {
@@ -1367,7 +1377,7 @@ const MusicPlayer = {
 
         this.currentIndex = index;
         const song = this.playlist[index];
-        this.audioEl.src = `/api/music/stream?file=${encodeURIComponent(song)}`;
+        this.audioEl.src = `/music/${encodeURIComponent(song)}`;
         this.audioEl.play().then(() => {
             this.isPlaying = true;
             this.updateUI();
