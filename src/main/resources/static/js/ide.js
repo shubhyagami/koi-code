@@ -30,9 +30,9 @@ const IDE = {
                     { token: 'delimiter', foreground: '8888a0' },
                 ],
                 colors: {
-                    'editor.background': '#0a0a0f',
+                    'editor.background': '#0a0a0f1a', // 0.1 opacity
                     'editor.foreground': '#e8e8f0',
-                    'editor.lineHighlightBackground': '#12121a',
+                    'editor.lineHighlightBackground': '#ffffff0a', // very subtle highlight
                     'editor.selectionBackground': '#3b82f655',
                     'editor.inactiveSelectionBackground': '#3b82f633',
                     'editorCursor.foreground': '#6366f1',
@@ -41,7 +41,7 @@ const IDE = {
                     'editor.selectionHighlightBackground': '#3b82f633',
                     'editorBracketMatch.background': '#1a1a28',
                     'editorBracketMatch.border': '#6366f1',
-                    'editorGutter.background': '#0a0a0f',
+                    'editorGutter.background': '#0a0a0f1a', // 0.1 opacity
                     'editorWidget.background': '#1a1a28',
                     'editorWidget.border': '#ffffff14',
                     'editorSuggestWidget.background': '#1a1a28',
@@ -1129,11 +1129,111 @@ const IDE = {
     }
 };
 
+const WallpaperManager = {
+    wallpapers: [],
+    currentIndex: -1,
+    autoChangeInterval: null,
+    videoEl: null,
+    nameEl: null,
+    isPlaying: true,
+
+    init() {
+        this.videoEl = document.getElementById('live-wallpaper');
+        this.nameEl = document.getElementById('wp-name');
+        if (!this.videoEl) return;
+
+        this.bindEvents();
+        this.fetchWallpapers();
+    },
+
+    bindEvents() {
+        document.getElementById('wp-prev')?.addEventListener('click', () => {
+            this.stopAutoChange();
+            this.prev();
+        });
+        document.getElementById('wp-next')?.addEventListener('click', () => {
+            this.stopAutoChange();
+            this.next();
+        });
+        document.getElementById('wp-playpause')?.addEventListener('click', (e) => {
+            if (this.autoChangeInterval) {
+                this.stopAutoChange();
+                e.target.classList.replace('fa-pause', 'fa-play');
+                e.target.title = "Resume Auto-change";
+                this.isPlaying = false;
+            } else {
+                this.startAutoChange();
+                e.target.classList.replace('fa-play', 'fa-pause');
+                e.target.title = "Pause Auto-change";
+                this.isPlaying = true;
+            }
+        });
+    },
+
+    fetchWallpapers() {
+        fetch('/api/wallpaper/list')
+            .then(res => res.json())
+            .then(data => {
+                this.wallpapers = data;
+                if (this.wallpapers.length > 0) {
+                    this.setWallpaper(0);
+                    this.startAutoChange();
+                } else {
+                    if (this.nameEl) this.nameEl.textContent = 'No wallpapers found';
+                }
+            })
+            .catch(err => {
+                console.error("Failed to fetch wallpapers", err);
+                if (this.nameEl) this.nameEl.textContent = 'Error';
+            });
+    },
+
+    setWallpaper(index) {
+        if (this.wallpapers.length === 0) return;
+        this.currentIndex = index;
+        const wp = this.wallpapers[this.currentIndex];
+        this.videoEl.src = `/api/wallpaper/stream?file=${encodeURIComponent(wp)}`;
+        if (this.nameEl) this.nameEl.textContent = wp;
+    },
+
+    next() {
+        if (this.wallpapers.length === 0) return;
+        let nextIndex = this.currentIndex + 1;
+        if (nextIndex >= this.wallpapers.length) nextIndex = 0;
+        this.setWallpaper(nextIndex);
+    },
+
+    prev() {
+        if (this.wallpapers.length === 0) return;
+        let prevIndex = this.currentIndex - 1;
+        if (prevIndex < 0) prevIndex = this.wallpapers.length - 1;
+        this.setWallpaper(prevIndex);
+    },
+
+    startAutoChange() {
+        this.stopAutoChange(); // ensure no duplicates
+        // Change every 5 minutes (300,000 ms)
+        this.autoChangeInterval = setInterval(() => {
+            this.next();
+        }, 5 * 60 * 1000);
+    },
+
+    stopAutoChange() {
+        if (this.autoChangeInterval) {
+            clearInterval(this.autoChangeInterval);
+            this.autoChangeInterval = null;
+        }
+    }
+};
+
 const MusicPlayer = {
     audioContext: null,
     source: null,
     bassFilter: null,
     trebleFilter: null,
+    analyser: null,
+    canvasCtx: null,
+    animationId: null,
     audioEl: null,
     playlist: [],
     currentIndex: -1,
@@ -1168,10 +1268,22 @@ const MusicPlayer = {
             this.trebleFilter.frequency.value = 3000;
             this.trebleFilter.gain.value = document.getElementById('music-treble').value;
 
+            // Create Analyser for visualizer
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 256;
+
             // Connect nodes
             this.source.connect(this.bassFilter);
             this.bassFilter.connect(this.trebleFilter);
-            this.trebleFilter.connect(this.audioContext.destination);
+            this.trebleFilter.connect(this.analyser);
+            this.analyser.connect(this.audioContext.destination);
+
+            // Setup Canvas for visualizer
+            const canvas = document.getElementById('music-visualizer');
+            if (canvas) {
+                this.canvasCtx = canvas.getContext('2d');
+                this.drawVisualizer();
+            }
             
             // Set initial volume
             this.audioEl.volume = document.getElementById('music-vol').value;
@@ -1301,13 +1413,7 @@ const MusicPlayer = {
 
     updateUI() {
         document.getElementById('music-play').innerHTML = this.isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
-        
-        const disc = document.getElementById('music-disc');
-        if (this.isPlaying) {
-            disc.classList.add('playing');
-        } else {
-            disc.classList.remove('playing');
-        }
+
 
         if (this.currentIndex >= 0) {
             document.getElementById('music-title').textContent = this.playlist[this.currentIndex];
@@ -1321,10 +1427,147 @@ const MusicPlayer = {
                 item.classList.remove('playing');
             }
         });
+    },
+
+    drawVisualizer() {
+        if (!this.analyser || !this.canvasCtx) return;
+        this.animationId = requestAnimationFrame(() => this.drawVisualizer());
+
+        const bufferLength = this.analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        this.analyser.getByteFrequencyData(dataArray);
+
+        const canvas = this.canvasCtx.canvas;
+        const width = canvas.width;
+        const height = canvas.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        const radius = 30; // inner radius
+
+        // Clear canvas
+        this.canvasCtx.clearRect(0, 0, width, height);
+
+        // We use fewer bars to make it look clean (64 out of 128)
+        const bars = 64;
+        const step = (Math.PI * 2) / bars;
+
+        for (let i = 0; i < bars; i++) {
+            const value = dataArray[i]; // 0 to 255
+            const percent = value / 255;
+            const barHeight = percent * 40; // Max outward length
+
+            const angle = i * step - (Math.PI / 2); // Start from top
+            
+            // Calculate start and end points
+            const x1 = centerX + Math.cos(angle) * radius;
+            const y1 = centerY + Math.sin(angle) * radius;
+            const x2 = centerX + Math.cos(angle) * (radius + barHeight);
+            const y2 = centerY + Math.sin(angle) * (radius + barHeight);
+
+            // Dynamic color
+            const hue = i * (360 / bars) + (value * 0.5); // Color shifts based on position and amplitude
+            const sat = 80 + (percent * 20); 
+            const lit = 40 + (percent * 30); 
+
+            this.canvasCtx.beginPath();
+            this.canvasCtx.moveTo(x1, y1);
+            this.canvasCtx.lineTo(x2, y2);
+            this.canvasCtx.strokeStyle = `hsl(${hue}, ${sat}%, ${lit}%)`;
+            this.canvasCtx.lineWidth = 3;
+            this.canvasCtx.lineCap = 'round';
+            this.canvasCtx.stroke();
+        }
+        
+        // Draw center pulse circle based on bass (lower frequencies)
+        const bassAvg = (dataArray[0] + dataArray[1] + dataArray[2]) / 3;
+        const pulse = (bassAvg / 255) * 10;
+        
+        this.canvasCtx.beginPath();
+        this.canvasCtx.arc(centerX, centerY, radius - 4 - pulse, 0, Math.PI * 2);
+        this.canvasCtx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+        this.canvasCtx.lineWidth = 1;
+        this.canvasCtx.stroke();
+    }
+};
+
+const PanelResizer = {
+    init() {
+        this.bindResizer('resizer-left', 'project-toolwindow', 'horizontal', true);
+        this.bindResizer('resizer-right', 'right-toolwindow', 'horizontal', false);
+        this.bindResizer('resizer-right', 'music-toolwindow', 'horizontal', false);
+        this.bindResizer('resizer-bottom', 'bottom-panel', 'vertical', false);
+    },
+
+    bindResizer(resizerId, targetId, direction, isLeftOrTop) {
+        const resizer = document.getElementById(resizerId);
+        if (!resizer) return;
+
+        let isDragging = false;
+        let startPos = 0;
+        let startSize = 0;
+
+        resizer.addEventListener('mousedown', (e) => {
+            const target = document.getElementById(targetId);
+            if (!target || target.style.display === 'none') return;
+            
+            isDragging = true;
+            resizer.classList.add('dragging');
+            document.body.style.cursor = direction === 'horizontal' ? 'col-resize' : 'row-resize';
+            
+            if (direction === 'horizontal') {
+                startPos = e.clientX;
+                startSize = target.getBoundingClientRect().width;
+            } else {
+                startPos = e.clientY;
+                startSize = target.getBoundingClientRect().height;
+            }
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const target = document.getElementById(targetId);
+            if (!target) return;
+
+            let newSize;
+            if (direction === 'horizontal') {
+                const diff = e.clientX - startPos;
+                newSize = isLeftOrTop ? startSize + diff : startSize - diff;
+                if (newSize > 100 && newSize < window.innerWidth - 100) {
+                    target.style.width = `${newSize}px`;
+                    target.style.flex = 'none';
+                }
+            } else {
+                const diff = e.clientY - startPos;
+                // For bottom panel, dragging UP (negative diff) increases height
+                newSize = startSize - diff;
+                if (newSize > 50 && newSize < window.innerHeight - 100) {
+                    target.style.height = `${newSize}px`;
+                    target.style.flex = 'none';
+                }
+            }
+
+            if (IDE.editor) {
+                IDE.editor.layout();
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                resizer.classList.remove('dragging');
+                document.body.style.cursor = '';
+                if (IDE.editor) {
+                    IDE.editor.layout();
+                }
+            }
+        });
     }
 };
 
 document.addEventListener('DOMContentLoaded', () => {
     IDE.init();
     MusicPlayer.init();
+    WallpaperManager.init();
+    PanelResizer.init();
 });
