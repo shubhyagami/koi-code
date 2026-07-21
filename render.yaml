@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: java-online-ide
+    env: docker
+    plan: free
+    region: oregon # or ohio, frankfurt, singapore
+    healthCheckPath: /
+    envVars:
+      - key: SERVER_PORT
+        value: 10000
